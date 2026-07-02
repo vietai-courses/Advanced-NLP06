@@ -99,23 +99,21 @@ class TokenBudget:
         TODO: Implement this method to accumulate token usage from an EvalResult
         into qwen_input and qwen_output.
         """
-        # --- YOUR CODE HERE ---
-        pass
+        self.qwen_input += result.total_input_tokens
+        self.qwen_output += result.total_output_tokens
 
     def add_meta(self, tokens: int) -> None:
         """
         TODO: Implement this method to accumulate meta-agent token usage (reflect/propose).
         """
-        # --- YOUR CODE HERE ---
-        pass
+        self.meta_total += tokens
 
     @property
     def qwen_total(self) -> int:
         """
         TODO: Return the sum of qwen_input and qwen_output tokens.
         """
-        # --- YOUR CODE HERE ---
-        return 0
+        return self.qwen_input + self.qwen_output
 
     def summary(self) -> str:
         return (
@@ -319,10 +317,72 @@ def evaluate(
     logger.info("Evaluating strategy %s on %s split.", strategy.id[:8], split)
     start_time = time.time()
 
-    # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("evaluate() is not implemented yet.")
+    correct_count_by_type : dict[str, int] = {}
+    total_correct : int = 0
+    total_input_tokens : int = 0
+    total_output_tokens : int = 0
+    accuracy : float = 0.0
+    accuracy_by_type : dict[str, float] = {}
+    count_by_type : dict[str, int] = {}
+    per_question = []
+    formatted_prompts = []
+    parsed_dataset_rows = []
+    
+    for idx, row in enumerate(dataset):
+        passage, question, gold_program, q_type, table, exe_ans = _parse_row(row, idx)[0]
+        count_by_type[q_type] = count_by_type.get(q_type, 0) + 1
+        parsed_dataset_rows.append((passage, question, gold_program, q_type, table, exe_ans))
+        prompt = build_prompt(strategy, passage, question)
+        formatted_prompt = model.format_prompt(system_message=_SYSTEM_MESSAGE, user_message=prompt, enable_thinking=False)
+        formatted_prompts.append(formatted_prompt)
 
+    generation_result = model.generate_batch(formatted_prompts, cot_format=False)
+
+    for idx, (passage, question, gold_program, q_type, table, exe_ans) in enumerate(parsed_dataset_rows):
+        predicted_ans = generation_result[idx].predicted_answer
+        evaluate_result = evaluate_program(predicted_ans, table)
+        is_correct = abs(evaluate_result - float(exe_ans)) <= 1e-4
+
+        per_question_result = QuestionResult(
+            question_id=str(idx),
+            passage=passage,
+            question=question,
+            gold_answer=gold_program,
+            predicted_answer=predicted_ans,
+            is_correct=is_correct,
+            raw_output=generation_result[idx].raw_output,
+            question_type=q_type,
+            input_tokens=generation_result[idx].input_tokens,
+            output_tokens=generation_result[idx].output_tokens,
+            gold_val=float(exe_ans),
+            predicted_val=evaluate_result
+        )
+        per_question.append(per_question_result)
+        total_correct += 1 if is_correct else 0
+        total_input_tokens += generation_result[idx].input_tokens
+        total_output_tokens += generation_result[idx].output_tokens
+        if is_correct:
+            correct_count_by_type[q_type] = correct_count_by_type.get(q_type, 0) + 1
+    
+    # Get overall accuracy and by type accuracy
+    accuracy = total_correct / len(dataset) if len(dataset) > 0 else 0.0
+    for q_type, count in count_by_type.items():
+        correct_count = correct_count_by_type.get(q_type, 0)
+        accuracy_by_type[q_type] = correct_count / count if count > 0 else 0.0
+
+    return EvalResult(
+        strategy_id=strategy.id,
+        split=split,
+        num_examples=len(dataset),
+        num_correct=total_correct,
+        accuracy=accuracy,
+        accuracy_by_type=accuracy_by_type,
+        count_by_type=count_by_type,
+        per_question=per_question,
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
+        elapsed_seconds=time.time() - start_time
+    )
 
 # ------------------------------------------------------------------
 # Row parsing helper
