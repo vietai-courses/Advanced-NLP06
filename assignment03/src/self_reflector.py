@@ -129,10 +129,12 @@ def reflect_self(
     """
     # --- YOUR CODE HERE ---
     reflect_message = _build_reflect_message(strategy, eval_result, progressive=progressive)
-    first_pass_output = model.generate_text(reflect_message)
+    reflect_prompt = model.format_prompt(system_message=_SYSTEM_REFLECT, user_message=reflect_message, enable_thinking=True)
+    first_pass_output = model.generate_text(reflect_prompt)
     # Strip any thinking tags or extra text from the first pass output
-    first_cleaned_output = re.sub("</?think>", "", first_pass_output, flags=re.IGNORECASE)
-    second_pass_output = model.generate_text(first_cleaned_output, top_k = max_retries, guided_json=ReflectionSchema.model_json_schema())
+    first_cleaned_output = re.sub(r"<think>.*?</think>", "", first_pass_output, flags=re.DOTALL).strip()
+    first_cleaned_prompt = model.format_prompt(system_message=_SYSTEM_REFLECT, user_message=first_cleaned_output, enable_thinking=True)
+    second_pass_output = model.generate_text(first_cleaned_prompt, top_k = max_retries, guided_json=ReflectionSchema.model_json_schema())
     try:
         json_output = json.loads(second_pass_output)
     except json.JSONDecodeError as e:
@@ -151,4 +153,4 @@ def reflect_self(
         summary=json_output.get("summary", "Fallback summary: Unable to parse reflection output."),
         raw_response=second_pass_output,
     )
-    return (reflection_output, model.count_tokens(second_pass_output) if bool(json_output) else 0)
+    return (reflection_output, model.count_tokens(first_pass_output) + model.count_tokens(second_pass_output) if bool(json_output) else 0)

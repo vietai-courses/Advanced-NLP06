@@ -83,9 +83,20 @@ def _is_valid_dsl_program(program: str) -> bool:
 
     TODO: Implement this validation check.
     """
-    # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("_is_valid_dsl_program() is not implemented yet.")
+    list_of_invalid_chars = ['=', '+', '*', '/']
+    if any(char in program for char in list_of_invalid_chars):
+        print(f"Program cannot contain =, +, *, /: {program}")
+        return False
+    if "-" in program and not re.search(r'(?<!\d)-|-(?!\d)', program):
+        print(f"Program cannot contain '-' unless it's part of a negative number: {program}")
+        return False
+    dsl_q_type = classify_question_type(program)
+    if dsl_q_type == "other":
+        # It might be a step reference like #0
+        if not re.search(r'#\d+', program):
+            print(f"Program must contain at least one valid DSL operator or a step reference: {program}")
+            return False
+    return True
 
 
 def _build_propose_message(history: StrategyHistory, parent_strategy_id: Optional[str] = None) -> str:
@@ -223,6 +234,77 @@ def propose_self(
       7. Validate generated/extracted few-shot programs using _is_valid_dsl_program().
       8. Return a new Strategy object and meta token usage.
     """
-    # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("propose_self() is not implemented yet.")
+    propose_message = _build_propose_message(history, parent_strategy_id)
+    propose_prompt = model.format_prompt(system_message=_SYSTEM_PROPOSE, user_message=propose_message, enable_thinking=True)
+    first_proposal = model.generate_text(propose_prompt)
+    clean_first_proposal = re.sub(r"<think>.*?</think>", "", first_proposal, flags=re.DOTALL).strip()
+    
+    first_cleaned_prompt = model.format_prompt(system_message=_SYSTEM_PROPOSE, user_message=clean_first_proposal, enable_thinking=True)
+    json_proposal = model.generate_text(first_cleaned_prompt, guided_json=ProposerSchema.model_json_schema())
+    
+    try:
+        json_output = json.loads(json_proposal)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e}")
+        json_output = {}
+    
+    # Identify the weakest category from the latest reflection
+    weakest_category = "other"
+    target_reflection = None
+    target_strategy = None
+
+    if parent_strategy_id is not None:
+        for s, r in zip(history.strategies, history.reflections):
+            if s.id == parent_strategy_id:
+                target_reflection = r
+                target_strategy = s
+                break
+    else:
+        target_reflection = history.latest_reflection()
+        target_strategy = history.latest_strategy()
+
+    if target_reflection and target_reflection.accuracy_by_type:
+        weakest_category = min(target_reflection.accuracy_by_type, key=target_reflection.accuracy_by_type.get)
+
+    # Select up to 2 matching training examples for the weakest category
+    few_shot_examples = []
+    if train_dataset is not None and weakest_category != "other":
+        matching_examples = [
+            FewShotExample(
+                passage=ex["context"],
+                question=ex["question"],
+                answer=ex["answer"],
+                reasoning=generate_few_shot_reasoning(
+                    ex["context"], ex["question"], ex["answer"], weakest_category, model, max_attempts=max_retries
+                )
+            )
+            for ex in train_dataset if classify_question_type(ex["answer"]) == weakest_category
+        ]
+    few_shot_examples = matching_examples[:2]
+    
+    # Validate generated/extracted few-shot programs using _is_valid_dsl_program() and it needs to merge with its parent example if any
+    valid_few_shot_examples = target_strategy.few_shot_examples if target_strategy else []
+    for example in few_shot_examples:
+        if _is_valid_dsl_program(example.answer):
+            valid_few_shot_examples.append(example)
+        else:
+            logger.warning(f"Invalid DSL program in few-shot example: {example.answer}")
+    
+    # Return a new Strategy object and meta token usage.
+    new_strategy = Strategy(
+        id=str(uuid.uuid4()),
+        prompt_template=json_output.get("instruction_phrasing", ""),
+        cot_format=CoTFormat(json_output.get("cot_format") if json_output.get("cot_format") in _VALID_COT else "none"),
+        few_shot_examples=valid_few_shot_examples,
+        retrieval_config=RetrievalConfig(
+            enabled=True,
+            top_k=max_retries,
+            similarity_threshold=0.75,
+        ),
+        metadata=StrategyMetadata(
+            iteration=len(history.strategies),
+            parent_id=parent_strategy_id,
+        )
+    )
+    total_meta_tokens = model.count_tokens(first_proposal) + model.count_tokens(json_proposal) if bool(json_output) else 0
+    return (new_strategy, total_meta_tokens)
