@@ -340,9 +340,9 @@ def evaluate(
 
     for idx, (passage, question, gold_program, q_type, table, exe_ans) in enumerate(parsed_dataset_rows):
         predicted_ans = generation_result[idx].predicted_answer
-        evaluate_result = evaluate_program(predicted_ans, table)
         is_correct = False
         try:
+            evaluate_result = evaluate_program(predicted_ans, table)
             is_correct = abs(evaluate_result - float(exe_ans)) <= 1e-4
         except Exception as e:
             print(f"Exception {e} | eval_result: {evaluate_result} | exe_ans: {exe_ans} | predicted_ans: {predicted_ans}")
