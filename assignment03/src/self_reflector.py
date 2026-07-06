@@ -147,10 +147,10 @@ def reflect_self(
 
     reflection_output = Reflection(
         strategy_id=strategy.id,
-        accuracy_by_type=json_output.get("accuracy_by_type", {}),
+        accuracy_by_type=eval_result.accuracy_by_type,
         top_failures=top_failures,
         hypothesis=json_output.get("hypothesis", "Chiến lược hiện tại yếu nhất"),
-        summary=json_output.get("summary", "Fallback summary: Unable to parse reflection output."),
+        summary=json_output.get("summary", "Fallback: Không thể phân tích phản ánh. Cần điều chỉnh chiến lược prompting để cải thiện độ chính xác."),
         raw_response=second_pass_output,
     )
     return (reflection_output, model.count_tokens(first_pass_output) + model.count_tokens(second_pass_output) if bool(json_output) else 0)
