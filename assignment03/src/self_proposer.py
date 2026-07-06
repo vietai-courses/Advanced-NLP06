@@ -54,8 +54,9 @@ LƯU Ý QUAN TRỌNG VỀ CÚ PHÁP CHƯƠNG TRÌNH (BẮT BUỘC TUÂN THỦ TR
 5. table_xxx chỉ nhận đúng 2 tham số: (tên_hàng, none)
 6. Số âm viết trực tiếp: add(-167.4, -53.3) — không dùng ngoặc thêm
 7. CỰC KỲ QUAN TRỌNG VỀ TỶ LỆ PHẦN TRĂM: Kết quả đầu ra của chương trình PHẢI luôn ở dạng tỷ lệ thập phân (ví dụ: 0.05 thay vì 5%, hay 0.03124 thay vì 3.124%). Tuyệt đối KHÔNG nhân thêm 100 ở bước cuối cùng của chương trình (KHÔNG dùng multiply(#X, 100) cho các câu hỏi tính phần trăm).
-8. CỰC KỲ QUAN TRỌNG: Nếu cần một giá trị cụ thể từ bảng (ví dụ: doanh thu năm 2022), KHÔNG dùng hàm table_xxx. Hãy tự đọc bảng và viết TRỰC TIẾP con số đó vào hàm toán học.
-9. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
+8. Nếu cần giá trị một ô CỤ THỂ từ bảng (ví dụ: doanh thu năm 2022 = 500 tỷ), đọc trực tiếp và viết số đó vào hàm, KHÔNG dùng table_xxx.
+9. CỰC KỲ QUAN TRỌNG — table_max / table_min / table_average / table_sum: Khi câu hỏi hỏi GIÁ TRỊ LỚN NHẤT / NHỎ NHẤT / TRUNG BÌNH / TỔNG của CẢ MỘT CỘT hoặc HÀNG trong bảng, BẮT BUỘC dùng table_max / table_min / table_average / table_sum. TUYỆT ĐỐI KHÔNG tự cộng/trừ từng ô thay thế.
+10. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
 
 Ví dụ đúng:
   subtract(7.758, 7.523), divide(#0, 7.523) (Tính tỷ lệ tăng trưởng phần trăm dưới dạng tỷ lệ thập phân, không nhân 100)
@@ -269,6 +270,10 @@ def propose_self(
     # Select up to 2 matching training examples for the weakest category
     few_shot_examples = []
     if train_dataset is not None and weakest_category != "other":
+        candidates = [ex for ex in train_dataset if classify_question_type(ex["answer"]) == weakest_category]
+        # Prioritize multi-step chains (#1, #2 references) for all arithmetic types — those are the hardest
+        if weakest_category in {"addition", "subtraction", "multiplication", "division"}:
+            candidates.sort(key=lambda ex: -ex["answer"].count(","))
         matching_examples = [
             FewShotExample(
                 passage=ex["context"],
@@ -278,7 +283,7 @@ def propose_self(
                     ex["context"], ex["question"], ex["answer"], weakest_category, model, max_attempts=max_retries
                 )
             )
-            for ex in train_dataset if classify_question_type(ex["answer"]) == weakest_category
+            for ex in candidates
         ]
     few_shot_examples = matching_examples[:2]
     
@@ -291,9 +296,15 @@ def propose_self(
             logger.warning(f"Invalid DSL program in few-shot example: {example.answer}")
     
     # Return a new Strategy object and meta token usage.
+    fallback_template = (
+        target_strategy.prompt_template if target_strategy
+        else "Bạn là chuyên gia phân tích tài chính. Hãy viết chương trình DSL để trả lời câu hỏi."
+    )
+    prompt_template = json_output.get("instruction_phrasing") or fallback_template
+
     new_strategy = Strategy(
         id=str(uuid.uuid4()),
-        prompt_template=json_output.get("instruction_phrasing", ""),
+        prompt_template=prompt_template,
         cot_format=CoTFormat(json_output.get("cot_format") if json_output.get("cot_format") in _VALID_COT else "none"),
         few_shot_examples=valid_few_shot_examples,
         retrieval_config=RetrievalConfig(

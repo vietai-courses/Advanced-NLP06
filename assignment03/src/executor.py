@@ -179,17 +179,20 @@ _SYSTEM_MESSAGE = (
 _DSL_BLOCK = """QUY TẮC VIẾT CHƯƠNG TRÌNH:
 1. Mỗi bước là một hàm riêng biệt, phân cách bằng dấu phẩy
 2. KHÔNG lồng hàm vào nhau (không dùng divide(table_average(...), ...))
-3. Dùng #0, #1, #2... để tham chiếu kết quả của bước trước (bắt đầu từ #0)
+3. Dùng #0, #1, #2... để tham chiếu kết quả của bước trước (bắt đầu từ #0). MỖI BƯỚC tạo ra một kết quả riêng: #0=kết quả bước 0, #1=kết quả bước 1, #2=kết quả bước 2, v.v.
 4. Tên cột/hàng trong table_xxx KHÔNG dùng dấu ngoặc kép
 5. table_xxx chỉ nhận đúng 2 tham số: (tên_hàng, none)
 6. Số âm viết trực tiếp: add(-167.4, -53.3) — không dùng ngoặc thêm
 7. CỰC KỲ QUAN TRỌNG VỀ TỶ LỆ PHẦN TRĂM: Kết quả đầu ra của chương trình PHẢI luôn ở dạng tỷ lệ thập phân (ví dụ: 0.05 thay vì 5%, hay 0.03124 thay vì 3.124%). Tuyệt đối KHÔNG nhân thêm 100 ở bước cuối cùng của chương trình (KHÔNG dùng multiply(#X, 100) cho các câu hỏi tính phần trăm).
-8. CỰC KỲ QUAN TRỌNG: Nếu cần một giá trị cụ thể từ bảng (ví dụ: doanh thu năm 2022), KHÔNG dùng hàm table_xxx. Hãy tự đọc bảng và viết TRỰC TIẾP con số đó vào hàm toán học.
-9. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
+8. Nếu cần giá trị một ô CỤ THỂ từ bảng (ví dụ: doanh thu năm 2022 = 500 tỷ), đọc trực tiếp và viết số đó vào hàm, KHÔNG dùng table_xxx.
+9. CỰC KỲ QUAN TRỌNG — table_max / table_min / table_average / table_sum: Khi câu hỏi hỏi GIÁ TRỊ LỚN NHẤT / NHỎ NHẤT / TRUNG BÌNH / TỔNG của CẢ MỘT CỘT hoặc HÀNG trong bảng (ví dụ: "cao nhất giai đoạn", "trung bình các năm", "tổng từ X đến Y"), BẮT BUỘC dùng table_max / table_min / table_average / table_sum. TUYỆT ĐỐI KHÔNG tự cộng/trừ từng ô thay thế.
+10. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
 
 Ví dụ đúng:
-  subtract(108.50, 100), divide(#0, 100) (Trích xuất trực tiếp số 108.50 và 100 từ văn bản/bảng)
-  table_max(Lãi ròng, none), table_min(Lãi ròng, none), subtract(#0, #1) (Tính max/min trên toàn bộ hàng)
+  subtract(108.50, 100), divide(#0, 100) (bước 0 → #0; bước 1 dùng #0)
+  table_max(Lãi ròng, none), table_min(Lãi ròng, none), subtract(#0, #1) (câu hỏi hỏi chênh lệch max-min → PHẢI dùng table_max và table_min)
+  table_average(Doanh thu, none) (câu hỏi hỏi trung bình cả cột → PHẢI dùng table_average, KHÔNG tự cộng từng ô)
+  add(14.7, 15.3), add(#0, 22.0), add(#1, 18.5), divide(#2, 4) (chuỗi cộng nhiều bước: #0=bước 0, #1=bước 1, #2=bước 2 — SAI khi viết add(#0, 18.5) cho bước 3; ĐÚNG: add(#1, 18.5) vì #1 là kết quả bước 1)
   divide(115.18, 100), divide(113.68, 100), subtract(#0, 1), subtract(#1, 1), add(#2, #3), divide(#4, 2)
 """
 
