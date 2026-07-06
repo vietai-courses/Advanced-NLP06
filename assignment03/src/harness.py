@@ -24,7 +24,7 @@ from src.executor import EvalResult, evaluate, classify_question_type, TokenBudg
 from src.model import QwenInference
 from src.self_proposer import propose_self
 from src.self_reflector import reflect_self
-from src.strategy import Strategy, StrategyHistory, StrategyMetadata, make_seed_strategy
+from src.strategy import Strategy, StrategyHistory, StrategyMetadata, make_seed_strategy, CoTFormat
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,30 @@ def select_parent_strategy(
     - 'original': Always mutate from the original seed strategy (iteration 0).
     - 'probabilistic': Select from Best, Original, and Latest based on the provided probabilities.
     """
-    # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("select_parent_strategy() is not implemented yet.")
+    if not history.strategies:
+        return None
+
+    if afo_mode == "none":
+        return history.strategies[-1]
+    elif afo_mode == "best":
+        best_strategy = max(history.strategies, key=lambda s: s.metadata.dev_accuracy or 0)
+        return best_strategy
+    elif afo_mode == "original":
+        return history.strategies[0]
+    elif afo_mode == "probabilistic":
+        import random
+        choices = random.choices(["best", "original", "latest"], weights=[afo_prob_best, afo_prob_original, afo_prob_latest], k=1)
+        choice = choices[0]
+        if choice == "best":
+            best_strategy = max(history.strategies, key=lambda s: s.metadata.dev_accuracy or 0)
+            return best_strategy
+        elif choice == "original":
+            return history.strategies[0]
+        else:
+            return history.strategies[-1]
+    else:
+        print("Unknown AFO mode:", afo_mode)
+        return None
 
 
 def select_curriculum_dataset(train_dataset: Dataset, iteration: int, train_size: int) -> Dataset:
@@ -103,8 +124,24 @@ def run_smoke_test(
          (to prevent infinite looping/truncation).
       6. Return True if valid, False otherwise. Make sure to restore model.max_new_tokens at the end.
     """
-    # --- YOUR CODE HERE ---
-    raise NotImplementedError("run_smoke_test() is not implemented yet.")
+    five_examples_dataset = train_dataset.shuffle(seed=42).select(range(min(5, len(train_dataset))))
+    strategy_cot_format = strategy.cot_format
+    original_max_tokens = model.max_new_tokens
+    if strategy_cot_format == CoTFormat.CHAIN:
+        model.max_new_tokens = 4096
+    elif strategy_cot_format == CoTFormat.NONE:
+        model.max_new_tokens = 256
+    print(f"Model max_new_tokens temporarily set to {model.max_new_tokens} for smoke test (strategy CoT format: {strategy_cot_format}).\n")
+    evaluate_result = evaluate(strategy, split="smoke_test", dataset=five_examples_dataset, model=model)
+    print(f"\nEvaluation results: {evaluate_result}")
+    # Check that at least one predicted answer is not None
+    has_valid_prediction = any(r.predicted_answer is not None for r in evaluate_result.per_question)
+    # Check that average output tokens generated per question does not exceed 90% of the token limit
+    avg_output_tokens = evaluate_result.total_output_tokens / len(evaluate_result.per_question) if evaluate_result.per_question else 0
+    are_tokens_within_limit = avg_output_tokens <= 0.9 * model.max_new_tokens
+    # Restore original max_new_tokens
+    model.max_new_tokens = original_max_tokens
+    return has_valid_prediction and are_tokens_within_limit
 
 
 def run_evoagent(
@@ -161,10 +198,100 @@ def run_evoagent(
 
     logger.info("Starting EvoAgent loop. Iterations %d–%d (T=%d).", start_iteration, T - 1, T)
 
-    # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("run_evoagent() is not implemented yet.")
+    t0 = time.time()
+    for iteration in tqdm(range(start_iteration, T)):
+        parent_strategy = None
+        meta_tokens_usage = 0
+        # 1. Propose strategy:
+        if iteration == 0:
+            strategy = make_seed_strategy()
+            print(f"\nIteration {iteration}: Using seed strategy.")
+        else:
+            parent_strategy = select_parent_strategy(history, 
+                                                     afo_mode, 
+                                                     afo_prob_best, 
+                                                     afo_prob_original, 
+                                                     afo_prob_latest)
+            if parent_strategy is None:
+                logger.warning("No parent strategy found for iteration %d. Using seed strategy.", iteration)
+                strategy = make_seed_strategy()
+            else:
+                print(f"\nIteration {iteration}: Proposing new strategy from parent (ID: {parent_strategy.id}).")
+                for attempt in range(3):
+                    strategy, meta_tokens_usage = propose_self(history,
+                                            model,
+                                            max_retries=3,
+                                            parent_strategy_id=parent_strategy.id,
+                                            train_dataset=train_dataset)
+                    if run_smoke_test(strategy, train_dataset, model):
+                        print(f"    [PASS] Smoke test passed on attempt {attempt + 1}.")
+                        break
+                    else:
+                        print(f"    [FAIL] Smoke test failed on attempt {attempt + 1}. Retrying...")
+                else:
+                    logger.error("Failed to propose a valid strategy after 3 attempts. Using parent strategy as fallback.")
+                    strategy = parent_strategy
+        
+        # 2: Set model.max_new_tokens dynamically based on strategy.cot_format
+        if strategy.cot_format == CoTFormat.CHAIN:
+            model.max_new_tokens = 4096
+        elif strategy.cot_format == CoTFormat.NONE:
+            model.max_new_tokens = 256
+        
+        # 3. Evaluate on train subset (curriculum or slice) and dev split.
+        if use_curriculum:
+            train_subset = select_curriculum_dataset(train_dataset, iteration, train_size)
+        else:
+            train_subset = train_dataset.shuffle(seed=42).select(range(min(train_size, len(train_dataset))))
+        # Eval results for train and dev
+        train_eval_result = evaluate(strategy, split="train", dataset=train_subset, model=model)
+        dev_eval_result = evaluate(strategy, split="dev", dataset=dev_dataset, model=model)
+        
+        # 4. Accumulate token usage in TokenBudget.
+        budget.add_eval(train_eval_result)
+        budget.add_eval(dev_eval_result)
+        budget.add_meta(meta_tokens_usage)
+        
+        # 5. Reflect on errors (except on the last iteration T-1).
+        reflection = None
+        reflection_tokens_usage = 0
+        if iteration < T - 1:
+            reflection, reflection_tokens_usage = reflect_self(strategy, train_eval_result, model, max_retries=5, progressive=progressive_reflections)
+            budget.add_meta(reflection_tokens_usage)
+        
+        # Fill in StrategyMetadata for this iteration
+        strategy.metadata = StrategyMetadata(
+            dev_accuracy=dev_eval_result.accuracy,
+            train_accuracy=train_eval_result.accuracy,
+            parent_id=parent_strategy.id if iteration > 0 and parent_strategy is not None else None,
+            iteration=iteration,
+            token_cost_claude=meta_tokens_usage + reflection_tokens_usage,
+            token_cost_qwen=(
+                train_eval_result.total_input_tokens + train_eval_result.total_output_tokens +
+                dev_eval_result.total_input_tokens + dev_eval_result.total_output_tokens
+            ),
+            extra={}
+        )
+        
+        # 6. Append/save strategies, evaluations, and reflections to the history file.
+        history.append_strategy(strategy)
+        if reflection is not None:
+            history.append_reflection(reflection)
+            _save_reflection_json(reflection, output_dir, iteration)
+        _save_strategy_json(strategy, output_dir, iteration)
+        _save_eval_result(train_eval_result, output_dir, iteration, tag="train")
+        _save_eval_result(dev_eval_result, output_dir, iteration, tag="dev")
 
+        if dev_eval_result.accuracy >= early_stop_accuracy:
+            logger.info("Early stop: dev accuracy %.3f reached threshold.", dev_eval_result.accuracy)
+            # still save, then break
+            break
+        logger.info("Iteration %d completed in %.1fs", iteration, time.time() - t0)
+    
+    _print_leaderboard(history)
+    logger.info("Token budget: %s", budget.summary())
+    
+    return history
 
 # ------------------------------------------------------------------
 # Internal Helpers for saving results
