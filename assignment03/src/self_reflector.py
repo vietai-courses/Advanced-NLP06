@@ -70,20 +70,16 @@ def _build_reflect_message(strategy: Strategy, eval_result: EvalResult, progress
             "Để khắc phục, bạn PHẢI tắt Chain-of-Thought (chuyển cot_format thành 'none') HOẶC giới hạn nghiêm ngặt độ dài suy nghĩ (tối đa 2 câu) "
             "và yêu cầu trả về trực tiếp định dạng PROGRAM:.\n"
         )
-
-    # ----------------------------------------------------------------
-    # Progressive Context Management
-    # ----------------------------------------------------------------
-    # TODO: Implement progressive decay for top_k failures based on iteration.
-    # - If progressive is True:
-    #   - For iteration <= 1: select top_k = 5 failures
-    #   - For iteration == 2: select top_k = 3 failures
-    #   - For iteration >= 3: select top_k = 1 failure
-    # - Else:
-    #   - select top_k = 5 failures
-    # ----------------------------------------------------------------
-    # --- YOUR CODE HERE ---
-    top_k = 5 # Placeholder
+    if progressive:
+        iteration = strategy.metadata.iteration
+        if iteration <= 1:
+            top_k = 5
+        elif iteration == 2:
+            top_k = 3
+        else:
+            top_k = 1
+    else:
+        top_k = 5
 
     iteration = strategy.metadata.iteration
     logger.info("Self-Reflector Progressive Context: iteration=%d, selected top_k=%d failures.", iteration, top_k)
@@ -132,5 +128,29 @@ def reflect_self(
       6. Return Reflection object and estimated token usage.
     """
     # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("reflect_self() is not implemented yet.")
+    reflect_message = _build_reflect_message(strategy, eval_result, progressive=progressive)
+    reflect_prompt = model.format_prompt(system_message=_SYSTEM_REFLECT, user_message=reflect_message, enable_thinking=True)
+    first_pass_output = model.generate_text(reflect_prompt)
+    # Strip any thinking tags or extra text from the first pass output
+    first_cleaned_output = re.sub(r"<think>.*?</think>", "", first_pass_output, flags=re.DOTALL).strip()
+    first_cleaned_prompt = model.format_prompt(system_message=_SYSTEM_REFLECT, user_message=first_cleaned_output, enable_thinking=True)
+    second_pass_output = model.generate_text(first_cleaned_prompt, top_k = max_retries, guided_json=ReflectionSchema.model_json_schema())
+    try:
+        json_output = json.loads(second_pass_output)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e}")
+        json_output = {}
+    
+    top_failures = []
+    for i, f in enumerate(json_output.get("top_failures", [])):
+        top_failures.append({i: f})
+
+    reflection_output = Reflection(
+        strategy_id=strategy.id,
+        accuracy_by_type=eval_result.accuracy_by_type,
+        top_failures=top_failures,
+        hypothesis=json_output.get("hypothesis", "Chiến lược hiện tại yếu nhất"),
+        summary=json_output.get("summary", "Fallback: Không thể phân tích phản ánh. Cần điều chỉnh chiến lược prompting để cải thiện độ chính xác."),
+        raw_response=second_pass_output,
+    )
+    return (reflection_output, model.count_tokens(first_pass_output) + model.count_tokens(second_pass_output) if bool(json_output) else 0)

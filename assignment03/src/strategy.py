@@ -418,11 +418,17 @@ def make_seed_strategy() -> Strategy:
         answer="add(600, 1200)",
         reasoning="Cổ tức tiền mặt dự phóng năm 2022 là 600 đồng/cp và năm 2023 là 1.200 đồng/cp. Tổng cổ tức 2 năm = 600 + 1200."
     )
+    ex3 = FewShotExample(
+        passage="lhg ghi nhận doanh thu (tỷ đồng) qua các năm như sau: 2017: 781, 2018: 820, 2019: 650, 2020: 590, 2021: 710, 2022(F): 850. bảng trên cho thấy biến động doanh thu của lhg trong giai đoạn này.",
+        question="Doanh thu trung bình hàng năm của LHG trong giai đoạn 2017-2022(F) là bao nhiêu tỷ đồng?",
+        answer="table_average(Doanh thu, none)",
+        reasoning="Câu hỏi hỏi TRUNG BÌNH của toàn bộ cột 'Doanh thu' qua các năm. Dùng table_average(Doanh thu, none) — không tự cộng từng ô."
+    )
     return Strategy(
         id=str(uuid.uuid4()),
         prompt_template=template,
         cot_format=CoTFormat.NONE,
-        few_shot_examples=[ex1, ex2],
+        few_shot_examples=[ex1, ex2, ex3],
         retrieval_config=RetrievalConfig(enabled=False),
         metadata=StrategyMetadata(iteration=0),
     )

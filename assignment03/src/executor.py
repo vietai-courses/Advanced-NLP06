@@ -99,23 +99,21 @@ class TokenBudget:
         TODO: Implement this method to accumulate token usage from an EvalResult
         into qwen_input and qwen_output.
         """
-        # --- YOUR CODE HERE ---
-        pass
+        self.qwen_input += result.total_input_tokens
+        self.qwen_output += result.total_output_tokens
 
     def add_meta(self, tokens: int) -> None:
         """
         TODO: Implement this method to accumulate meta-agent token usage (reflect/propose).
         """
-        # --- YOUR CODE HERE ---
-        pass
+        self.meta_total += tokens
 
     @property
     def qwen_total(self) -> int:
         """
         TODO: Return the sum of qwen_input and qwen_output tokens.
         """
-        # --- YOUR CODE HERE ---
-        return 0
+        return self.qwen_input + self.qwen_output
 
     def summary(self) -> str:
         return (
@@ -181,17 +179,20 @@ _SYSTEM_MESSAGE = (
 _DSL_BLOCK = """QUY TẮC VIẾT CHƯƠNG TRÌNH:
 1. Mỗi bước là một hàm riêng biệt, phân cách bằng dấu phẩy
 2. KHÔNG lồng hàm vào nhau (không dùng divide(table_average(...), ...))
-3. Dùng #0, #1, #2... để tham chiếu kết quả của bước trước (bắt đầu từ #0)
+3. Dùng #0, #1, #2... để tham chiếu kết quả của bước trước (bắt đầu từ #0). MỖI BƯỚC tạo ra một kết quả riêng: #0=kết quả bước 0, #1=kết quả bước 1, #2=kết quả bước 2, v.v.
 4. Tên cột/hàng trong table_xxx KHÔNG dùng dấu ngoặc kép
 5. table_xxx chỉ nhận đúng 2 tham số: (tên_hàng, none)
 6. Số âm viết trực tiếp: add(-167.4, -53.3) — không dùng ngoặc thêm
 7. CỰC KỲ QUAN TRỌNG VỀ TỶ LỆ PHẦN TRĂM: Kết quả đầu ra của chương trình PHẢI luôn ở dạng tỷ lệ thập phân (ví dụ: 0.05 thay vì 5%, hay 0.03124 thay vì 3.124%). Tuyệt đối KHÔNG nhân thêm 100 ở bước cuối cùng của chương trình (KHÔNG dùng multiply(#X, 100) cho các câu hỏi tính phần trăm).
-8. CỰC KỲ QUAN TRỌNG: Nếu cần một giá trị cụ thể từ bảng (ví dụ: doanh thu năm 2022), KHÔNG dùng hàm table_xxx. Hãy tự đọc bảng và viết TRỰC TIẾP con số đó vào hàm toán học.
-9. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
+8. Nếu cần giá trị một ô CỤ THỂ từ bảng (ví dụ: doanh thu năm 2022 = 500 tỷ), đọc trực tiếp và viết số đó vào hàm, KHÔNG dùng table_xxx.
+9. CỰC KỲ QUAN TRỌNG — table_max / table_min / table_average / table_sum: Khi câu hỏi hỏi GIÁ TRỊ LỚN NHẤT / NHỎ NHẤT / TRUNG BÌNH / TỔNG của CẢ MỘT CỘT hoặc HÀNG trong bảng (ví dụ: "cao nhất giai đoạn", "trung bình các năm", "tổng từ X đến Y"), BẮT BUỘC dùng table_max / table_min / table_average / table_sum. TUYỆT ĐỐI KHÔNG tự cộng/trừ từng ô thay thế.
+10. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
 
 Ví dụ đúng:
-  subtract(108.50, 100), divide(#0, 100) (Trích xuất trực tiếp số 108.50 và 100 từ văn bản/bảng)
-  table_max(Lãi ròng, none), table_min(Lãi ròng, none), subtract(#0, #1) (Tính max/min trên toàn bộ hàng)
+  subtract(108.50, 100), divide(#0, 100) (bước 0 → #0; bước 1 dùng #0)
+  table_max(Lãi ròng, none), table_min(Lãi ròng, none), subtract(#0, #1) (câu hỏi hỏi chênh lệch max-min → PHẢI dùng table_max và table_min)
+  table_average(Doanh thu, none) (câu hỏi hỏi trung bình cả cột → PHẢI dùng table_average, KHÔNG tự cộng từng ô)
+  add(14.7, 15.3), add(#0, 22.0), add(#1, 18.5), divide(#2, 4) (chuỗi cộng nhiều bước: #0=bước 0, #1=bước 1, #2=bước 2 — SAI khi viết add(#0, 18.5) cho bước 3; ĐÚNG: add(#1, 18.5) vì #1 là kết quả bước 1)
   divide(115.18, 100), divide(113.68, 100), subtract(#0, 1), subtract(#1, 1), add(#2, #3), divide(#4, 2)
 """
 
@@ -319,10 +320,78 @@ def evaluate(
     logger.info("Evaluating strategy %s on %s split.", strategy.id[:8], split)
     start_time = time.time()
 
-    # --- YOUR CODE HERE ---
-    # Delete the raise statement below and replace it with your implementation.
-    raise NotImplementedError("evaluate() is not implemented yet.")
+    correct_count_by_type : dict[str, int] = {}
+    total_correct : int = 0
+    total_input_tokens : int = 0
+    total_output_tokens : int = 0
+    accuracy : float = 0.0
+    accuracy_by_type : dict[str, float] = {}
+    count_by_type : dict[str, int] = {}
+    per_question = []
+    formatted_prompts = []
+    parsed_dataset_rows = []
+    
+    for idx, row in enumerate(dataset):
+        passage, question, gold_program, q_type, table, exe_ans = _parse_row(row, idx)[0]
+        count_by_type[q_type] = count_by_type.get(q_type, 0) + 1
+        parsed_dataset_rows.append((passage, question, gold_program, q_type, table, exe_ans))
+        prompt = build_prompt(strategy, passage, question)
+        formatted_prompt = model.format_prompt(system_message=_SYSTEM_MESSAGE, user_message=prompt, enable_thinking=False)
+        formatted_prompts.append(formatted_prompt)
 
+    generation_result = model.generate_batch(formatted_prompts, cot_format=False)
+
+    for idx, (passage, question, gold_program, q_type, table, exe_ans) in enumerate(parsed_dataset_rows):
+        predicted_ans = generation_result[idx].predicted_answer
+        is_correct = False
+        evaluate_result = None
+        try:
+            evaluate_result = evaluate_program(predicted_ans, table)
+            is_correct = abs(evaluate_result - float(exe_ans)) <= 1e-4
+        except Exception as e:
+            print(f"Exception {e} | eval_result: {evaluate_result} | exe_ans: {exe_ans} | predicted_ans: {predicted_ans}")
+            is_correct = (predicted_ans == gold_program)
+
+        per_question_result = QuestionResult(
+            question_id=str(idx),
+            passage=passage,
+            question=question,
+            gold_answer=gold_program,
+            predicted_answer=predicted_ans,
+            is_correct=is_correct,
+            raw_output=generation_result[idx].raw_output,
+            question_type=q_type,
+            input_tokens=generation_result[idx].input_tokens,
+            output_tokens=generation_result[idx].output_tokens,
+            gold_val=float(exe_ans),
+            predicted_val=evaluate_result
+        )
+        per_question.append(per_question_result)
+        total_correct += 1 if is_correct else 0
+        total_input_tokens += generation_result[idx].input_tokens
+        total_output_tokens += generation_result[idx].output_tokens
+        if is_correct:
+            correct_count_by_type[q_type] = correct_count_by_type.get(q_type, 0) + 1
+    
+    # Get overall accuracy and by type accuracy
+    accuracy = total_correct / len(dataset) if len(dataset) > 0 else 0.0
+    for q_type, count in count_by_type.items():
+        correct_count = correct_count_by_type.get(q_type, 0)
+        accuracy_by_type[q_type] = correct_count / count if count > 0 else 0.0
+
+    return EvalResult(
+        strategy_id=strategy.id,
+        split=split,
+        num_examples=len(dataset),
+        num_correct=total_correct,
+        accuracy=accuracy,
+        accuracy_by_type=accuracy_by_type,
+        count_by_type=count_by_type,
+        per_question=per_question,
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
+        elapsed_seconds=time.time() - start_time
+    )
 
 # ------------------------------------------------------------------
 # Row parsing helper
