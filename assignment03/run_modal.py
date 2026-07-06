@@ -85,6 +85,12 @@ def run():
         with open(proof_path, "w", encoding="utf-8") as f:
             json.dump(proof_data, f, ensure_ascii=False, indent=2)
         print(f"Generated evolution proof in volume: {proof_path}")
+
+        # Save best strategy as iter_best_strategy.json for convenient submission
+        if best_strategy:
+            best_strat_path = Path("/runs/exp_self/iter_best_strategy.json")
+            best_strat_path.write_text(best_strategy.to_json(), encoding="utf-8")
+            print(f"Saved best strategy (iter {best_strategy.metadata.iteration}, acc={best_acc:.3f}) to: {best_strat_path}")
     else:
         print("Error: history.jsonl not found. Cannot generate evolution proof.")
         
