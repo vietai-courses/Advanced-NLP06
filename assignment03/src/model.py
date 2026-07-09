@@ -145,7 +145,7 @@ class QwenInference:
                 t_p = 1.0
                 t_k = -1
                 m_p = 0.0
-                p_p = 1.5  # critical: prevents infinite loops in thinking mode at near-greedy decoding
+                p_p = 1.5  # prevents infinite loops in thinking mode at near-greedy decoding
             else:
                 temp = 0.0
                 t_p = 1.0
