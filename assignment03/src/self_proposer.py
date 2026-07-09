@@ -57,6 +57,7 @@ LƯU Ý QUAN TRỌNG VỀ CÚ PHÁP CHƯƠNG TRÌNH (BẮT BUỘC TUÂN THỦ TR
 8. Nếu cần giá trị một ô CỤ THỂ từ bảng (ví dụ: doanh thu năm 2022 = 500 tỷ), đọc trực tiếp và viết số đó vào hàm, KHÔNG dùng table_xxx.
 9. CỰC KỲ QUAN TRỌNG — table_max / table_min / table_average / table_sum: Khi câu hỏi hỏi GIÁ TRỊ LỚN NHẤT / NHỎ NHẤT / TRUNG BÌNH / TỔNG của CẢ MỘT CỘT hoặc HÀNG trong bảng, BẮT BUỘC dùng table_max / table_min / table_average / table_sum. TUYỆT ĐỐI KHÔNG tự cộng/trừ từng ô thay thế.
 10. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
+11. CỰC KỲ QUAN TRỌNG — TỶ LỆ TĂNG TRƯỞNG / PHẦN TRĂM THAY ĐỔI: Khi câu hỏi dùng từ 'tỷ lệ tăng trưởng', 'tốc độ tăng', 'phần trăm thay đổi', 'tăng/giảm bao nhiêu %', 'tăng trưởng so với', 'biến động' → BẮT BUỘC dùng subtract(giá_trị_mới, giá_trị_cũ), divide(#0, giá_trị_cũ). KHÔNG chỉ dùng subtract đơn độc.
 
 Ví dụ đúng:
   subtract(7.758, 7.523), divide(#0, 7.523) (Tính tỷ lệ tăng trưởng phần trăm dưới dạng tỷ lệ thập phân, không nhân 100)
@@ -65,7 +66,7 @@ Ví dụ đúng:
   table_max(Lãi ròng, none), table_min(Lãi ròng, none), subtract(#0, #1) (Tính max/min trên toàn bộ hàng)
 
 LƯU Ý QUAN TRỌNG VỀ ĐỊNH DẠNG CHIẾN LƯỢC:
-- Định dạng suy luận (cot_format) có thể chọn từ: "none" (không suy nghĩ trước khi trả lời, direct program), "stepbystep" (suy nghĩ từng bước ngắn gọn), hoặc "chain" (lập luận đầy đủ).
+- Định dạng suy luận (cot_format) có thể chọn từ: "none" (không suy nghĩ trước khi trả lời, direct program), "stepbystep" (suy nghĩ từng bước ngắn gọn), hoặc "chain" (lập luận đầy đủ). Ưu tiên chọn "chain" khi độ chính xác chưa đạt 65% — "chain" cho phép mô hình lập luận chi tiết hơn và ít bỏ sót bước tính.
 - Trích xuất 1-2 ví dụ few-shot từ Failure Logs (giữ ngắn gọn). Các ví dụ few-shot phải viết theo đúng Cú Pháp Chương Trình ở trên.
 - instruction_phrasing là phần hướng dẫn/phong cách/vai trò chung viết bằng tiếng Việt. KHÔNG chứa các chuỗi giữ chỗ như {passage}, {question}, {few_shot_block} vì hệ thống tự động chèn.
 
@@ -288,19 +289,24 @@ def propose_self(
     few_shot_examples = matching_examples[:2]
     
     # Validate generated/extracted few-shot programs using _is_valid_dsl_program() and it needs to merge with its parent example if any
-    valid_few_shot_examples = target_strategy.few_shot_examples if target_strategy else []
+    valid_few_shot_examples = list(target_strategy.few_shot_examples) if target_strategy else []
     for example in few_shot_examples:
         if _is_valid_dsl_program(example.answer):
             valid_few_shot_examples.append(example)
         else:
             logger.warning(f"Invalid DSL program in few-shot example: {example.answer}")
+    # Cap to prevent prompts growing unboundedly (5 = seed 3 examples + 2 new per iteration)
+    valid_few_shot_examples = valid_few_shot_examples[:5]
     
     # Return a new Strategy object and meta token usage.
     fallback_template = (
         target_strategy.prompt_template if target_strategy
         else "Bạn là chuyên gia phân tích tài chính. Hãy viết chương trình DSL để trả lời câu hỏi."
     )
-    prompt_template = json_output.get("instruction_phrasing") or fallback_template
+    _raw_phrasing = json_output.get("instruction_phrasing") or ""
+    # Reject English-only or very short templates
+    _has_vietnamese = any('\u00c0' <= c <= '\u1ef9' for c in _raw_phrasing)
+    prompt_template = _raw_phrasing if (_has_vietnamese and len(_raw_phrasing) > 30) else fallback_template
 
     new_strategy = Strategy(
         id=str(uuid.uuid4()),
