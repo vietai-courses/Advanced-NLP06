@@ -40,7 +40,8 @@ YÊU CẦU ĐỘ DÀI VÀ CẤU TRÚC (BẮT BUỘC):
 - Viết ngắn gọn và súc tích. Tổng độ dài toàn bộ bài phân tích/suy nghĩ KHÔNG ĐƯỢC vượt quá 500 từ.
 - KHÔNG lặp từ, không viết dông dài, không tự tạo ra văn bản rác hoặc ký tự lặp vô nghĩa.
 - Giả thuyết: tối đa 2 câu.
-- Tóm tắt (summary): tối đa 1 đoạn văn ngắn (3-4 câu)."""
+- Tóm tắt (summary): tối đa 1 đoạn văn ngắn (3-4 câu).
+- BẮT BUỘC: Toàn bộ phản hồi PHẢI viết bằng tiếng Việt. KHÔNG dùng tiếng Anh cho bất kỳ trường nào."""
 
 
 def _build_reflect_message(strategy: Strategy, eval_result: EvalResult, progressive: bool = True) -> str:

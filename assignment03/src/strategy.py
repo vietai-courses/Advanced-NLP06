@@ -424,11 +424,17 @@ def make_seed_strategy() -> Strategy:
         answer="table_average(Doanh thu, none)",
         reasoning="Câu hỏi hỏi TRUNG BÌNH của toàn bộ cột 'Doanh thu' qua các năm. Dùng table_average(Doanh thu, none) — không tự cộng từng ô."
     )
+    ex4 = FewShotExample(
+        passage="doanh thu thuần năm 2020 của mwg đạt 86.516 tỷ đồng, năm 2021 dự phóng đạt 98.350 tỷ đồng.",
+        question="Tốc độ tăng trưởng doanh thu thuần của MWG từ năm 2020 đến năm 2021 dự phóng là bao nhiêu?",
+        answer="subtract(98350, 86516), divide(#0, 86516)",
+        reasoning="Câu hỏi hỏi TỐC ĐỘ TĂNG TRƯỞNG (tỷ lệ % thay đổi) → BẮT BUỘC dùng subtract(mới, cũ) rồi divide(#0, cũ). Bước 1: subtract(98350, 86516) = chênh lệch. Bước 2: divide(#0, 86516) = tỷ lệ tăng trưởng dạng thập phân."
+    )
     return Strategy(
         id=str(uuid.uuid4()),
         prompt_template=template,
-        cot_format=CoTFormat.NONE,
-        few_shot_examples=[ex1, ex2, ex3],
+        cot_format=CoTFormat.CHAIN,
+        few_shot_examples=[ex1, ex2, ex3, ex4],
         retrieval_config=RetrievalConfig(enabled=False),
         metadata=StrategyMetadata(iteration=0),
     )
