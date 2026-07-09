@@ -130,7 +130,7 @@ class QwenInference:
                 t_p = 0.95
                 t_k = 20
                 m_p = 0.0
-                p_p = 0.0
+                p_p = 1.5  # presence penalty prevents repetition loops in long thinking blocks
             else:
                 # Instruct (or non-thinking) mode for reasoning tasks
                 temp = self.temperature
@@ -139,11 +139,19 @@ class QwenInference:
                 m_p = 0.0
                 p_p = 1.5
         else:
-            temp = 0.0
-            t_p = 1.0
-            t_k = -1
-            m_p = 0.0
-            p_p = 0.0
+            if cot_format:
+                # Greedy + thinking: use a tiny temperature to unlock presence_penalty
+                temp = 0.01
+                t_p = 1.0
+                t_k = -1
+                m_p = 0.0
+                p_p = 1.5  # critical: prevents infinite loops in thinking mode at near-greedy decoding
+            else:
+                temp = 0.0
+                t_p = 1.0
+                t_k = -1
+                m_p = 0.0
+                p_p = 0.0
 
         sampling_params = {
             "max_new_tokens": self.max_new_tokens,

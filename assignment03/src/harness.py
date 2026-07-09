@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
+import collections, random as _random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -127,10 +128,9 @@ def run_smoke_test(
     five_examples_dataset = train_dataset.shuffle(seed=42).select(range(min(5, len(train_dataset))))
     strategy_cot_format = strategy.cot_format
     original_max_tokens = model.max_new_tokens
-    if strategy_cot_format == CoTFormat.CHAIN:
-        model.max_new_tokens = 4096
-    elif strategy_cot_format == CoTFormat.NONE:
-        model.max_new_tokens = 256
+
+    model.max_new_tokens = 4096 if strategy.cot_format != CoTFormat.NONE else 256
+
     print(f"Model max_new_tokens temporarily set to {model.max_new_tokens} for smoke test (strategy CoT format: {strategy_cot_format}).\n")
     evaluate_result = evaluate(strategy, split="smoke_test", dataset=five_examples_dataset, model=model)
     print(f"\nEvaluation results: {evaluate_result}")
@@ -233,16 +233,23 @@ def run_evoagent(
                     strategy = parent_strategy
         
         # 2: Set model.max_new_tokens dynamically based on strategy.cot_format
-        if strategy.cot_format == CoTFormat.CHAIN:
-            model.max_new_tokens = 4096
-        elif strategy.cot_format == CoTFormat.NONE:
-            model.max_new_tokens = 256
+        model.max_new_tokens = 4096 if strategy.cot_format != CoTFormat.NONE else 256
         
         # 3. Evaluate on train subset (curriculum or slice) and dev split.
         if use_curriculum:
             train_subset = select_curriculum_dataset(train_dataset, iteration, train_size)
-        else:
-            train_subset = train_dataset.shuffle(seed=42).select(range(min(train_size, len(train_dataset))))
+        else: # Stratified sample: ensure all question types are represented
+            _rng = _random.Random(42 + iteration)
+            _by_type = collections.defaultdict(list)
+            for _ex in train_dataset:
+                _by_type[classify_question_type(_ex['answer'])].append(_ex)
+            _per_type = max(1, train_size // len(_by_type))
+            _stratified = []
+            for _bucket in _by_type.values():
+                _rng.shuffle(_bucket)
+                _stratified.extend(_bucket[:_per_type])
+            _rng.shuffle(_stratified)
+            train_subset = Dataset.from_list(_stratified[:train_size])
         # Eval results for train and dev
         train_eval_result = evaluate(strategy, split="train", dataset=train_subset, model=model)
         dev_eval_result = evaluate(strategy, split="dev", dataset=dev_dataset, model=model)
@@ -281,12 +288,13 @@ def run_evoagent(
         _save_strategy_json(strategy, output_dir, iteration)
         _save_eval_result(train_eval_result, output_dir, iteration, tag="train")
         _save_eval_result(dev_eval_result, output_dir, iteration, tag="dev")
+        
+        logger.info("Iteration %d completed in %.1fs", iteration, time.time() - t0)
 
         if dev_eval_result.accuracy >= early_stop_accuracy:
             logger.info("Early stop: dev accuracy %.3f reached threshold.", dev_eval_result.accuracy)
             # still save, then break
             break
-        logger.info("Iteration %d completed in %.1fs", iteration, time.time() - t0)
     
     _print_leaderboard(history)
     logger.info("Token budget: %s", budget.summary())
