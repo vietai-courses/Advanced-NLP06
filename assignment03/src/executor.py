@@ -187,6 +187,7 @@ _DSL_BLOCK = """QUY TẮC VIẾT CHƯƠNG TRÌNH:
 8. Nếu cần giá trị một ô CỤ THỂ từ bảng (ví dụ: doanh thu năm 2022 = 500 tỷ), đọc trực tiếp và viết số đó vào hàm, KHÔNG dùng table_xxx.
 9. CỰC KỲ QUAN TRỌNG — table_max / table_min / table_average / table_sum: Khi câu hỏi hỏi GIÁ TRỊ LỚN NHẤT / NHỎ NHẤT / TRUNG BÌNH / TỔNG của CẢ MỘT CỘT hoặc HÀNG trong bảng (ví dụ: "cao nhất giai đoạn", "trung bình các năm", "tổng từ X đến Y"), BẮT BUỘC dùng table_max / table_min / table_average / table_sum. TUYỆT ĐỐI KHÔNG tự cộng/trừ từng ô thay thế.
 10. CỰC KỲ QUAN TRỌNG: Nếu câu hỏi yêu cầu tính chênh lệch hoặc so sánh đơn thuần mà không có từ 'phần trăm' hoặc '%', chỉ sử dụng duy nhất phép trừ (subtract) — KHÔNG tự động thêm bước chia (divide) để tính tỷ lệ.
+11. CỰC KỲ QUAN TRỌNG — TỶ LỆ TĂNG TRƯỞNG / PHẦN TRĂM THAY ĐỔI: Khi câu hỏi dùng từ 'tỷ lệ tăng trưởng', 'tốc độ tăng', 'phần trăm thay đổi', 'tăng/giảm bao nhiêu %', 'tăng trưởng so với', 'biến động' → BẮT BUỘC dùng subtract(giá_trị_mới, giá_trị_cũ), divide(#0, giá_trị_cũ). KHÔNG chỉ dùng subtract đơn độc.
 
 Ví dụ đúng:
   subtract(108.50, 100), divide(#0, 100) (bước 0 → #0; bước 1 dùng #0)
@@ -339,7 +340,8 @@ def evaluate(
         formatted_prompt = model.format_prompt(system_message=_SYSTEM_MESSAGE, user_message=prompt, enable_thinking=False)
         formatted_prompts.append(formatted_prompt)
 
-    generation_result = model.generate_batch(formatted_prompts, cot_format=False)
+    generation_result = model.generate_batch(formatted_prompts, 
+                                             cot_format=(strategy.cot_format != CoTFormat.NONE))
 
     for idx, (passage, question, gold_program, q_type, table, exe_ans) in enumerate(parsed_dataset_rows):
         predicted_ans = generation_result[idx].predicted_answer
@@ -350,7 +352,7 @@ def evaluate(
             is_correct = abs(evaluate_result - float(exe_ans)) <= 1e-4
         except Exception as e:
             print(f"Exception {e} | eval_result: {evaluate_result} | exe_ans: {exe_ans} | predicted_ans: {predicted_ans}")
-            is_correct = (predicted_ans == gold_program)
+            is_correct = (normalize_program(predicted_ans or '') == normalize_program(gold_program))
 
         per_question_result = QuestionResult(
             question_id=str(idx),
