@@ -40,15 +40,14 @@ def run():
     subprocess.run(
         [
             "python", "main.py",
-            "--T", "5",
+            "--T", "7",
             "--dataset", "local_financial_qa",
             "--output-dir", "/runs/exp_self",
-            "--train-size", "200",
-            "--dev-size", "240",
+            "--train-size", "300",
+            "--dev-size", "584",
             "--model", "QuantTrio/Qwen3.5-4B-AWQ",
             "--gpu-memory-utilization", "0.7",
             "--progressive-reflections",
-            "--use-curriculum",
             "--afo-mode", "best",
         ],
         check=True,
@@ -281,7 +280,8 @@ def smoke():
     gpu="A10G",
     cpu=4,
     memory=16384,
-    timeout=3600,
+    timeout=7200,
+    retries=1,
     secrets=[modal.Secret.from_name("huggingface")],
     volumes={"/runs": volume},
 )
@@ -296,6 +296,7 @@ def run_submit(strategy_path: str, output_file: str = "/runs/submission.csv", li
         "--output-file", output_file,
         "--model", "QuantTrio/Qwen3.5-4B-AWQ",
         "--gpu-memory-utilization", "0.7",
+        "--num-samples", "5",
     ]
     if limit is not None:
         cmd.extend(["--limit", str(limit)])

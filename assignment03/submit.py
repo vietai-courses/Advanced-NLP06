@@ -11,7 +11,9 @@ import argparse
 import csv
 import json
 import logging
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Ensure the root of the workspace is in the import path
@@ -23,6 +25,20 @@ from src.evaluator import evaluate_program
 from src.model import QwenInference, extract_answer
 from src.strategy import Strategy, CoTFormat
 from format_submission import clean_prediction_value
+
+
+def _repair_program(program: str) -> str:
+    """Best-effort repair of common malformed DSL programs before execution."""
+    if not program:
+        return program
+    # Fix bare 1-argument calls: add(x) -> add(x, 0)  subtract(x) -> subtract(x, 0)
+    # These happen when the model outputs an incomplete step
+    program = re.sub(
+        r'\b(add|subtract|multiply|divide)\(([^,()]+)\)',
+        r'\1(\2, 0)',
+        program,
+    )
+    return program
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,6 +97,12 @@ def parse_args() -> argparse.Namespace:
         default=0.90,
         help="Fraction of GPU memory to use for SGLang.",
     )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=3,
+        help="Number of samples per question for self-consistency majority voting (1 = greedy, 3 recommended for chain/stepbystep).",
+    )
     return parser.parse_args()
 
 
@@ -112,10 +134,14 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("Initializing QwenInference with model '%s'...", args.model)
+    num_samples = args.num_samples
+    # Self-consistency requires temperature > 0; greedy (0.0) gives identical samples
+    sample_temperature = 0.4 if num_samples > 1 else 0.0
+    logger.info("Self-consistency: %d sample(s), temperature=%.1f", num_samples, sample_temperature)
     model = QwenInference(
         model_name_or_path=args.model,
         max_new_tokens=args.max_new_tokens,
-        temperature=0.0,  # Greedy for determinism
+        temperature=sample_temperature,
         use_4bit=not args.no_4bit,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_model_len=args.max_model_len,
@@ -140,13 +166,17 @@ def main() -> None:
     # TODO: Set appropriate max generation bounds
     model.max_new_tokens = 4096 if strategy.cot_format != CoTFormat.NONE else 256
 
-    logger.info("Running batch inference on test set...")
-    with tqdm(total=len(prompts), desc="Running inference") as pbar:
-        raw_outputs = model.generate_batch(
-            prompts,
-            cot_format=(strategy.cot_format != CoTFormat.NONE)
-        )
-        pbar.update(len(raw_outputs))
+    logger.info("Running batch inference on test set (%d sample(s) per question)...", num_samples)
+    all_sample_outputs = []
+    for sample_idx in range(num_samples):
+        logger.info("Sample %d/%d...", sample_idx + 1, num_samples)
+        with tqdm(total=len(prompts), desc=f"Inference sample {sample_idx+1}/{num_samples}") as pbar:
+            outputs = model.generate_batch(
+                prompts,
+                cot_format=(strategy.cot_format != CoTFormat.NONE)
+            )
+            pbar.update(len(outputs))
+        all_sample_outputs.append(outputs)
 
     logger.info("Parsing programs and generating submission file at %s...", output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -158,15 +188,41 @@ def main() -> None:
         writer = csv.writer(f)
         writer.writerow(["id", "Usage", "predicted_value"])
 
-        for row, raw_out in tqdm(zip(test_dataset, raw_outputs), total=len(test_dataset), desc="Saving predictions"):
-            pred_program = raw_out.predicted_answer
-            
-            # Execute the program to get executed value
-            try:
-                pred_val = evaluate_program(pred_program, row["table"])
-            except Exception:
+        for idx, row in enumerate(tqdm(test_dataset, desc="Saving predictions")):
+            # Collect all candidate programs across samples
+            candidate_programs = []
+            for s_idx in range(num_samples):
+                prog = all_sample_outputs[s_idx][idx].predicted_answer
+                # Detect loop: truncate programs with > 8 steps
+                if prog and prog.count(',') > 8:
+                    steps = [s.strip() for s in prog.split(',') if s.strip()]
+                    prog = ', '.join(steps[:6])
+                # Program repair: fix common malformed patterns
+                prog = _repair_program(prog)
+                candidate_programs.append(prog)
+
+            # Self-consistency: execute all candidates, take majority numeric result
+            candidate_vals = []
+            for prog in candidate_programs:
+                try:
+                    v = evaluate_program(prog, row["table"])
+                    if v is not None:
+                        candidate_vals.append((round(v, 8), prog))
+                except Exception:
+                    pass
+
+            if candidate_vals:
+                # Majority vote on the rounded numeric result
+                val_counts = Counter(v for v, _ in candidate_vals)
+                best_val = val_counts.most_common(1)[0][0]
+                pred_val = best_val
+                pred_program = next(p for v, p in candidate_vals if v == best_val)
+            else:
                 pred_val = None
+                pred_program = candidate_programs[0] if candidate_programs else None
+
             pred_val = clean_prediction_value(pred_val)
+            raw_out = all_sample_outputs[0][idx]  # use sample 0 for raw_output logging
 
             usage = "Public"
             writer.writerow([row["id"], usage, pred_val])
