@@ -13,10 +13,10 @@ This document describes the final assessment package uploaded to ThinkFlic after
 Name the ZIP:
 
 ```text
-A3_<KaggleTeamName>_<StudentID1>_<StudentID2>.zip
+A3_<KaggleTeamName>_<StudentEmail1>_<StudentEmail2>.zip
 ```
 
-For an individual submission, omit `<StudentID2>`.
+For an individual submission, omit `<StudentEmail>`.
 
 ## Local Files vs. ThinkFlic Folder
 
@@ -28,7 +28,7 @@ These are two different locations:
 ## Required Folder Structure
 
 ```text
-A3_<KaggleTeamName>_<StudentID1>_<StudentID2>/
+A3_<KaggleTeamName>_<StudentEmail1>_<StudentEmail2>/
 |-- README.md
 |-- report.pdf
 |-- integrity_declaration.pdf
